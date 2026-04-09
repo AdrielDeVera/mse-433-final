@@ -1,0 +1,5 @@
+variant,cv_rmse,rmse_change_pct
+baseline,5.967158636442083,0.0
+lag_14_dropped,5.955656812403087,-0.19
+lead_time_dropped,5.968337325221621,0.02
+rolling_dropped,5.970640311337745,0.06
