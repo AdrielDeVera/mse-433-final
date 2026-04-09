@@ -1,0 +1,115 @@
+
+======================================================================
+  1. BASIC DATASET INFO
+======================================================================
+Rows   : 3,204
+Columns: 23
+
+Column names:
+   1. item_id
+   2. category
+   3. stock_level
+   4. reorder_point
+   5. reorder_frequency_days
+   6. lead_time_days
+   7. daily_demand
+   8. demand_std_dev
+   9. item_popularity_score
+  10. storage_location_id
+  11. zone
+  12. picking_time_seconds
+  13. handling_cost_per_unit
+  14. unit_price
+  15. holding_cost_per_unit_day
+  16. stockout_count_last_month
+  17. order_fulfillment_rate
+  18. total_orders_last_month
+  19. turnover_ratio
+  20. layout_efficiency_score
+  21. last_restock_date
+  22. forecasted_demand_next_7d
+  23. KPI_score
+
+Data types:
+  item_id                                  object
+  category                                 object
+  stock_level                              int64
+  reorder_point                            int64
+  reorder_frequency_days                   int64
+  lead_time_days                           int64
+  daily_demand                             float64
+  demand_std_dev                           float64
+  item_popularity_score                    float64
+  storage_location_id                      object
+  zone                                     object
+  picking_time_seconds                     int64
+  handling_cost_per_unit                   float64
+  unit_price                               float64
+  holding_cost_per_unit_day                float64
+  stockout_count_last_month                int64
+  order_fulfillment_rate                   float64
+  total_orders_last_month                  int64
+  turnover_ratio                           float64
+  layout_efficiency_score                  float64
+  last_restock_date                        object
+  forecasted_demand_next_7d                float64
+  KPI_score                                float64
+
+First 10 rows:
+ item_id   category  stock_level  reorder_point  reorder_frequency_days  lead_time_days  daily_demand  demand_std_dev  item_popularity_score storage_location_id zone  picking_time_seconds  handling_cost_per_unit  unit_price  holding_cost_per_unit_day  stockout_count_last_month  order_fulfillment_rate  total_orders_last_month  turnover_ratio  layout_efficiency_score last_restock_date  forecasted_demand_next_7d  KPI_score
+ITM10000     Pharma          283             21                       4               4         49.85            1.56                   0.43                 L82    B                   106                    3.61      117.80                       1.14                          0                    0.80                      700            3.33                     0.33        2024-02-17                     184.37      0.556
+ITM10001 Automotive          301             52                       9               6         23.34            2.55                   0.69                 L15    A                    45                    3.54      178.80                       1.09                          3                    0.79                      736           10.36                     0.98        2024-10-01                     221.94      0.723
+ITM10002  Groceries          132             60                      11               8         37.69            3.15                   0.62                  L4    B                   177                    0.52       54.05                       0.95                          7                    0.75                      814           14.32                     0.87        2024-04-07                      53.85      0.680
+ITM10003 Automotive          346             46                      13               5         33.69            2.79                   0.21                 L95    A                    39                    2.64       31.10                       1.90                          0                    0.96                      994            2.08                     0.29        2024-01-27                      92.04      0.488
+ITM10004 Automotive           49             55                       4               6         49.58            5.23                   0.31                 L36    D                    35                    1.40      104.97                       0.63                          5                    0.83                      299            5.65                     0.96        2024-05-17                     194.58      0.670
+ITM10005    Apparel          154             62                       9               6         35.95            9.47                   0.41                 L32    A                    94                    1.96      164.12                       0.66                          1                    0.99                      477            7.61                     0.95        2024-07-12                     180.65      0.803
+ITM10006  Groceries           86             97                       6               4          9.04            4.72                   0.28                 L29    C                   110                    4.90      134.38                       0.37                          8                    0.88                      418            4.25                     0.45        2024-12-10                     223.69      0.526
+ITM10007  Groceries           84             89                      13               4         47.82            6.78                   0.24                 L18    D                   130                    0.88      131.09                       1.42                          7                    0.74                      958           11.37                     0.70        2024-11-05                     195.75      0.558
+ITM10008  Groceries          311             22                       4               9         33.72            7.04                   0.15                 L95    D                    40                    3.75       13.32                       0.71                          8                    0.86                      697           10.64                     0.29        2024-11-04                     105.74      0.541
+ITM10009 Automotive           44             98                       9               8          3.91            8.78                   0.89                 L14    A                    26                    1.28       70.32                       1.63                          8                    1.00                      496            2.65                     0.27        2024-01-21                     154.78      0.366
+
+======================================================================
+  2. MISSING VALUES
+======================================================================
+No missing values detected in any column.
+
+Total missing cells : 0
+Total cells         : 73,692
+
+======================================================================
+  3. KEY BUSINESS METRICS
+======================================================================
+Unique SKUs (item_id): 3,204
+Date column          : last_restock_date
+  Earliest date      : 2024-01-01 00:00:00
+  Latest date        : 2024-12-30 00:00:00
+  Date span          : 364 days
+  Unparseable dates  : 0
+
+Order volume stats (total_orders_last_month):
+  count     :     3,204.00
+  mean      :       521.71
+  std       :       276.77
+  min       :        50.00
+  25%       :       283.00
+  50%       :       513.50
+  75%       :       764.25
+  max       :       999.00
+  total     :    1,671,574
+
+Daily demand stats (daily_demand):
+  count     :     3,204.00
+  mean      :        25.44
+  std       :        14.04
+  min       :         1.01
+  25%       :        13.54
+  50%       :        25.41
+  75%       :        37.41
+  max       :        49.98
+
+Category distribution:
+  Pharma                       660 (20.6%)
+  Automotive                   658 (20.5%)
+  Electronics                  651 (20.3%)
+  Groceries                    618 (19.3%)
+  Apparel                      617 (19.3%)
