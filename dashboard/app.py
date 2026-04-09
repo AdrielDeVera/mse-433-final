@@ -25,8 +25,10 @@ CLEAN_CSV  = ROOT / "data" / "cleaned" / "daily_demand.csv"
 REC_CSV    = ROOT / "outputs" / "recommendations.csv"
 MODEL_PATH = ROOT / "outputs" / "best_model.joblib"
 COMP_CSV   = ROOT / "outputs" / "model_comparison.csv"
+INTERM_CSV = ROOT / "outputs" / "sku_intermittency.csv"
 
 HORIZON = 14
+PENALTY = 10.0   # shortage penalty per unit ($)
 
 # ── HistogramGBT class (needed for pickle) ────────────────────────────────
 N_BINS = 16; MIN_LEAF = 30
@@ -99,6 +101,29 @@ class HistogramGBT:
         return p
 
 
+# ── Normal distribution helpers ───────────────────────────────────────────
+
+def norm_cdf(x):
+    """Abramowitz & Stegun approximation of the normal CDF."""
+    a1, a2, a3 = 0.254829592, -0.284496736, 1.421413741
+    a4, a5, p  = -1.453152027, 1.061405429, 0.3275911
+    s = np.where(x >= 0, 1.0, -1.0)
+    x = np.abs(x) / np.sqrt(2)
+    t = 1.0 / (1.0 + p * x)
+    y = 1 - (((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t * np.exp(-x*x)
+    return 0.5 * (1 + s * y)
+
+
+def norm_ppf(p):
+    """Abramowitz & Stegun rational approximation of the inverse normal CDF."""
+    a0, a1, a2 = 2.515517, 0.802853, 0.010328
+    b1, b2, b3 = 1.432788, 0.189269, 0.001308
+    if p < 0.5:
+        return -norm_ppf(1.0 - p)
+    t = np.sqrt(-2.0 * np.log(1.0 - p))
+    return t - (a0 + a1 * t + a2 * t**2) / (1.0 + b1 * t + b2 * t**2 + b3 * t**3)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  DATA LOADING (cached)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -124,6 +149,73 @@ def load_model():
 def load_model_comparison():
     return pd.read_csv(COMP_CSV, index_col=0)
 
+@st.cache_data
+def load_intermittency():
+    return pd.read_csv(INTERM_CSV)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  REAL-TIME POLICY RECALCULATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+def recalculate_policies(rec_base, clean_df, s_order, h_hold, service_pct):
+    """Recalculate dynamic & static inventory policies from slider values."""
+    z_sl = norm_ppf(service_pct / 100.0)
+
+    mu_demand    = rec_base["mu_demand"].values
+    sigma_demand = rec_base["sigma_demand"].values
+    mu_lead      = rec_base["mu_lead"].values
+    sigma_lead   = rec_base["sigma_lead"].values
+    current_stock = rec_base["current_stock"].values
+
+    H_sku = h_hold  # uniform holding cost from slider
+
+    # ── Dynamic policy ────────────────────────────────────────────────────
+    safety_stock = z_sl * np.sqrt(
+        mu_lead * sigma_demand**2 + mu_demand**2 * sigma_lead**2
+    )
+    rop       = mu_demand * mu_lead + safety_stock
+    D_annual  = mu_demand * 365.0
+    eoq       = np.clip(np.sqrt(2 * D_annual * s_order / H_sku), 1, None)
+
+    ordering_dyn = (D_annual / eoq) * s_order
+    holding_dyn  = (eoq / 2 + safety_stock) * H_sku
+    shortage_dyn = (1.0 - service_pct / 100.0) * D_annual * PENALTY
+    total_dyn    = ordering_dyn + holding_dyn + shortage_dyn
+
+    # ── Static baseline ───────────────────────────────────────────────────
+    clean_indexed = clean_df.set_index("item_id")
+    hist_mean = clean_indexed.reindex(rec_base["SKU"])["daily_demand"].values.astype(float)
+    hist_std  = clean_indexed.reindex(rec_base["SKU"])["demand_std_dev"].values.astype(float)
+
+    ss_static       = hist_mean * 7.0
+    D_annual_static = hist_mean * 365.0
+    eoq_static      = np.clip(np.sqrt(2 * D_annual_static * s_order / H_sku), 1, None)
+
+    ordering_sta = (D_annual_static / eoq_static) * s_order
+    holding_sta  = (eoq_static / 2 + ss_static) * H_sku
+
+    sigma_total  = np.sqrt(mu_lead * hist_std**2 + hist_mean**2 * sigma_lead**2)
+    z_static     = np.where(sigma_total > 0, ss_static / sigma_total, 3.0)
+    shortage_sta = (1 - norm_cdf(z_static)) * D_annual_static * PENALTY
+    total_sta    = ordering_sta + holding_sta + shortage_sta
+
+    # ── Assemble result ───────────────────────────────────────────────────
+    cost_saving_pct = np.where(
+        total_sta > 0, (total_sta - total_dyn) / total_sta * 100, 0.0
+    )
+    action = np.where(current_stock < rop, "Reorder Now", "Hold")
+
+    result = rec_base.copy()
+    result["safety_stock"]        = np.round(safety_stock, 2)
+    result["ROP"]                 = np.round(rop, 2)
+    result["EOQ"]                 = np.round(eoq, 2)
+    result["annual_cost_dynamic"] = np.round(total_dyn, 2)
+    result["annual_cost_static"]  = np.round(total_sta, 2)
+    result["cost_saving_pct"]     = np.round(cost_saving_pct, 2)
+    result["action"]              = action
+    return result
+
 
 @st.cache_data
 def generate_sku_forecast(sku_id: str):
@@ -135,15 +227,12 @@ def generate_sku_forecast(sku_id: str):
     if sku_data.empty:
         return None, None, None
 
-    # Encode categoricals
     cat_map = {c: i for i, c in enumerate(df["category"].unique())}
     int_map = {c: i for i, c in enumerate(df["intermittency_class"].unique())}
 
-    # Historical demand
     hist_demand = sku_data["demand"].values.tolist()
     last_date = sku_data["date"].max()
 
-    # Static features
     row0 = sku_data.iloc[0]
     static = np.array([
         row0["sku_mean_demand"], row0["sku_std_demand"],
@@ -153,7 +242,6 @@ def generate_sku_forecast(sku_id: str):
         int_map.get(row0["intermittency_class"], 0),
     ])
 
-    # Recursive forecast
     forecasts = []
     for step in range(HORIZON):
         fc_date = last_date + pd.Timedelta(days=step + 1)
@@ -198,8 +286,18 @@ st.set_page_config(
 
 st.title("📦 MSE 433 — Demand Forecast & Inventory Optimisation")
 
-rec = load_recommendations()
-sku_list = sorted(rec["SKU"].unique())
+rec_base  = load_recommendations()
+clean_df  = load_clean()
+interm_df = load_intermittency()
+sku_list  = sorted(rec_base["SKU"].unique())
+
+# Join intermittency class onto recommendations
+interm_map = interm_df.set_index("item_id")["intermittency_class"]
+rec_base["intermittency_class"] = rec_base["SKU"].map(interm_map).fillna("Unknown")
+
+# Most recent date in dataset (for stock label)
+feat_df = load_features()
+dataset_last_date = feat_df["date"].max().strftime("%Y-%m-%d")
 
 # ── Sidebar ──────────────────────────────────────────────────────────────
 st.sidebar.header("Controls")
@@ -224,12 +322,44 @@ service_level = st.sidebar.slider(
     "Service level (%)", min_value=80, max_value=99, value=95, step=1
 )
 
+# ── Model Performance ────────────────────────────────────────────────────
+st.sidebar.markdown("---")
+with st.sidebar.expander("Model Performance"):
+    comp = load_model_comparison()
+    best_model = comp["RMSE"].idxmin()
+    comp = comp.rename(columns={"RMSE": "CV RMSE"})
+    styled_comp = comp.style.format({
+        "CV RMSE": "{:.3f}", "MAE": "{:.3f}", "MAPE": "{:.1f}"
+    }).apply(
+        lambda row: [
+            "background-color: #d4edda; font-weight: bold" if row.name == best_model
+            else "" for _ in row
+        ],
+        axis=1,
+    )
+    st.dataframe(styled_comp, use_container_width=True)
+    st.caption(f"Best model: **{best_model}** (lowest CV RMSE)")
+
 st.sidebar.markdown("---")
 st.sidebar.markdown(
     "**Model**: from-scratch Histogram GBT (XGBoost-style)  \n"
     "**Horizon**: 14-day recursive forecast  \n"
     f"**SKUs**: {len(sku_list):,}"
 )
+
+# ── Info note ─────────────────────────────────────────────────────────────
+st.sidebar.markdown("---")
+st.sidebar.info(
+    "**Data updates:** export CSV from WMS → place in `/data/raw/` → "
+    "run `python run_pipeline.py` → restart dashboard"
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  RECALCULATE POLICIES FROM SLIDER VALUES
+# ═══════════════════════════════════════════════════════════════════════════
+
+rec = recalculate_policies(rec_base, clean_df, ordering_cost, holding_cost, service_level)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -253,7 +383,6 @@ with tab1:
     else:
         (hist_dates, hist_vals), (fc_dates, fc_vals), std_dev = result
 
-        # Build chart dataframe
         hist_df = pd.DataFrame({
             "date": hist_dates, "demand": hist_vals, "type": "Historical"
         })
@@ -266,7 +395,6 @@ with tab1:
             "type": "Forecast"
         })
 
-        # Use matplotlib for better control
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
 
@@ -289,12 +417,14 @@ with tab1:
         st.pyplot(fig)
         plt.close(fig)
 
-        # Summary metrics
         sku_rec = rec[rec["SKU"] == selected_sku].iloc[0]
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("14-Day Total", f"{sku_rec['forecast_14d_total']:.0f} units")
         col2.metric("Avg Daily", f"{sku_rec['mu_demand']:.1f} units")
-        col3.metric("Current Stock", f"{sku_rec['current_stock']:,}")
+        col3.metric(
+            f"Last recorded stock (as of {dataset_last_date})",
+            f"{sku_rec['current_stock']:,}",
+        )
         col4.metric("Action", sku_rec["action"])
 
 
@@ -302,8 +432,7 @@ with tab1:
 with tab2:
     st.subheader("Inventory Policy — All SKUs")
 
-    # Filter options
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     cat_filter = col1.multiselect(
         "Filter by category",
         options=sorted(rec["category"].unique()),
@@ -314,17 +443,24 @@ with tab2:
         options=sorted(rec["action"].unique()),
         default=sorted(rec["action"].unique()),
     )
+    interm_filter = col3.multiselect(
+        "Filter by intermittency class",
+        options=sorted(rec["intermittency_class"].unique()),
+        default=sorted(rec["intermittency_class"].unique()),
+    )
 
     filtered = rec[
-        (rec["category"].isin(cat_filter)) & (rec["action"].isin(action_filter))
+        (rec["category"].isin(cat_filter))
+        & (rec["action"].isin(action_filter))
+        & (rec["intermittency_class"].isin(interm_filter))
     ].copy()
 
-    # Display columns
     display_cols = [
-        "SKU", "category", "safety_stock", "ROP", "EOQ",
+        "SKU", "category", "intermittency_class",
+        "safety_stock", "ROP", "EOQ",
         "current_stock", "mu_demand", "mu_lead",
         "annual_cost_dynamic", "annual_cost_static",
-        "cost_saving_pct", "action"
+        "cost_saving_pct", "action",
     ]
     filtered_display = filtered[display_cols].sort_values(
         "cost_saving_pct", ascending=False
@@ -340,15 +476,15 @@ with tab2:
             "annual_cost_dynamic": "${:,.0f}",
             "annual_cost_static": "${:,.0f}",
             "cost_saving_pct": "{:.1f}%",
-        }).applymap(
-            lambda v: "background-color: #d4edda" if v == "Hold" else "background-color: #f8d7da",
-            subset=["action"]
+        }).map(
+            lambda v: "background-color: #d4edda" if v == "Hold"
+            else "background-color: #f8d7da",
+            subset=["action"],
         ),
         use_container_width=True,
         height=500,
     )
 
-    # Summary stats
     st.markdown("---")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total SKUs", f"{len(filtered):,}")
@@ -382,7 +518,6 @@ with tab3:
                  fontweight="bold")
     ax.legend()
 
-    # Add saving % labels
     for i, (_, row) in enumerate(top20.iterrows()):
         ax.annotate(
             f"-{row['cost_saving_pct']:.0f}%",
@@ -394,11 +529,10 @@ with tab3:
     st.pyplot(fig)
     plt.close(fig)
 
-    # Aggregate summary
     st.markdown("---")
     total_dyn = rec["annual_cost_dynamic"].sum()
     total_sta = rec["annual_cost_static"].sum()
-    agg_saving = (total_sta - total_dyn) / total_sta * 100
+    agg_saving = (total_sta - total_dyn) / total_sta * 100 if total_sta > 0 else 0.0
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Static Cost", f"${total_sta:,.0f}")
