@@ -310,6 +310,22 @@ selected_sku = st.sidebar.selectbox(
 )
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("Date Range")
+
+# Date range picker for historical demand display
+import datetime as _dt
+feat_dates = feat_df["date"].dropna()
+_min_date = feat_dates.min().date()
+_max_date = feat_dates.max().date()
+date_range = st.sidebar.date_input(
+    "Historical window",
+    value=(_min_date, _max_date),
+    min_value=_min_date,
+    max_value=_max_date,
+    help="Filter the historical demand window shown in the forecast chart",
+)
+
+st.sidebar.markdown("---")
 st.sidebar.subheader("Cost Parameters")
 
 ordering_cost = st.sidebar.slider(
@@ -386,6 +402,10 @@ with tab1:
         hist_df = pd.DataFrame({
             "date": hist_dates, "demand": hist_vals, "type": "Historical"
         })
+        # Apply date range filter from sidebar
+        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+            dr_start, dr_end = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1])
+            hist_df = hist_df[(hist_df["date"] >= dr_start) & (hist_df["date"] <= dr_end)]
         fc_arr = np.array(fc_vals)
         fc_df = pd.DataFrame({
             "date": fc_dates,
