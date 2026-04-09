@@ -433,52 +433,100 @@ plt.tight_layout(); fig.savefig(ERR_DIR/"rmse_by_step.png"); plt.close(fig)
 print(f"   Saved 3 error-analysis plots")
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  SENSITIVITY — drop lag_14
+#  SENSITIVITY ANALYSIS — Feature Ablation Study
 # ═══════════════════════════════════════════════════════════════════════════
 
-print(f"\n{ts()} Sensitivity: retrain without lag_14 ...")
-FCOLS_NO14 = [c for c in FCOLS if c != "lag_14"]
-cix = [FCOLS.index(c) for c in FCOLS_NO14]
+print(f"\n{ts()} ── Sensitivity Analysis (CV RMSE, expanding-window) ──")
 
-Xs14, ys14 = X_tr[sub_ix][:, cix], y_tr[sub_ix]
+# Winner's hyperparameters for retraining
 if winner == "XGBoost":
-    m14 = HistogramGBT(n_estimators=xgb_best["n_estimators"],
-                       max_depth=xgb_best["max_depth"],
-                       learning_rate=xgb_best["learning_rate"],
-                       subsample=xgb_best["subsample"],
-                       max_leaves=None, random_state=42).fit(Xs14, ys14)
+    sens_kw = dict(n_estimators=xgb_best["n_estimators"],
+                   max_depth=xgb_best["max_depth"],
+                   learning_rate=xgb_best["learning_rate"],
+                   subsample=xgb_best["subsample"],
+                   max_leaves=None, random_state=42)
 else:
-    m14 = HistogramGBT(n_estimators=lgb_best["n_estimators"],
-                       max_leaves=lgb_best["num_leaves"],
-                       learning_rate=lgb_best["learning_rate"],
-                       max_depth=12, random_state=42).fit(Xs14, ys14)
+    sens_kw = dict(n_estimators=lgb_best["n_estimators"],
+                   max_leaves=lgb_best["num_leaves"],
+                   learning_rate=lgb_best["learning_rate"],
+                   max_depth=12, subsample=1.0, random_state=42)
 
-# Recursive eval without lag_14
-def batch_no14(model):
-    hist = [train_dem[:, i].copy() for i in range(train_dem.shape[1])]
-    out = np.zeros((n_skus, HORIZON))
-    for s in range(HORIZON):
-        H = np.column_stack(hist); nh = H.shape[1]
-        l1 = H[:,-1]; l3 = H[:,-3] if nh>=3 else l1; l7 = H[:,-7] if nh>=7 else l1
-        w7  = H[:,-7:]  if nh>=7  else H
-        w14 = H[:,-14:] if nh>=14 else H
-        X = np.column_stack([
-            l1,l3,l7, w7.mean(1),w7.std(1,ddof=1),
-            w14.mean(1),w14.std(1,ddof=1),
-            np.where(w14.mean(1)!=0,w14.std(1,ddof=1)/w14.mean(1),0.),
-            test_dow[:,s].astype(float),test_woy[:,s].astype(float),
-            test_mon[:,s].astype(float),test_wkn[:,s].astype(float),
-            static_v])
-        out[:,s] = np.clip(model.predict(X),0,None); hist.append(out[:,s].copy())
-    return out
+# Define ablation variants: (label, features_to_drop)
+sens_variants = [
+    ("baseline",          []),
+    ("lag_14_dropped",    ["lag_14"]),
+    ("lead_time_dropped", ["sku_mean_lead_time"]),
+    ("rolling_dropped",   ["rolling_mean_7", "rolling_std_7",
+                           "rolling_mean_14", "rolling_std_14"]),
+]
 
-p14 = batch_no14(m14)
-r14 = rmse(af, p14.ravel())
-r_full = comp.loc[winner, "RMSE"]
-delta = r14 - r_full; pct = delta / r_full * 100
-print(f"   RMSE with lag_14   : {r_full:.4f}")
-print(f"   RMSE without lag_14: {r14:.4f}")
-print(f"   Δ RMSE             : +{delta:.4f}  ({pct:+.1f}%)")
+sensitivity_rows = []
+for label, drop_cols in sens_variants:
+    keep = [c for c in FCOLS if c not in drop_cols]
+    col_idx = [FCOLS.index(c) for c in keep]
+    Xcv_v = Xcv[:, col_idx]
+
+    # Pre-bin CV data for this feature subset
+    binner_v = HistogramGBT()
+    binner_v._prebin(Xcv_v)
+    edges_v = binner_v._edges
+
+    fold_scores = []
+    for ti, vi in tscv.split(len(Xcv_v)):
+        m = HistogramGBT(**sens_kw).fit(Xcv_v[ti], ycv[ti], _edges=edges_v)
+        fold_scores.append(rmse(ycv[vi], m.predict(Xcv_v[vi])))
+    cv_rmse_val = float(np.mean(fold_scores))
+    sensitivity_rows.append({"variant": label, "cv_rmse": cv_rmse_val})
+    dropped_str = ", ".join(drop_cols) if drop_cols else "(all features)"
+    print(f"   {label:<20s} CV RMSE = {cv_rmse_val:.4f}  [{dropped_str}]")
+
+# Compute % change relative to baseline
+sens_baseline = sensitivity_rows[0]["cv_rmse"]
+for row in sensitivity_rows:
+    row["rmse_change_pct"] = round(
+        (row["cv_rmse"] - sens_baseline) / sens_baseline * 100, 2)
+
+# Save CSV
+sens_df = pd.DataFrame(sensitivity_rows)[["variant", "cv_rmse", "rmse_change_pct"]]
+sens_df.to_csv(ERR_DIR / "sensitivity_results.csv", index=False)
+print(f"\n   {ts()} Saved → {(ERR_DIR / 'sensitivity_results.csv').relative_to(ROOT)}")
+
+# Bar chart — baseline vs ablation variants
+fig, ax = plt.subplots(figsize=(9, 5))
+bar_colors = ["#2c3e50" if v == "baseline" else "#e74c3c"
+              for v in sens_df["variant"]]
+bars = ax.bar(sens_df["variant"], sens_df["cv_rmse"],
+              color=bar_colors, edgecolor="white", width=0.55)
+ax.set_title("Sensitivity Analysis — CV RMSE by Feature Ablation",
+             fontsize=13, fontweight="bold")
+ax.set_ylabel("CV RMSE")
+ax.set_xlabel("Variant")
+for bar, val in zip(bars, sens_df["cv_rmse"]):
+    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+            f"{val:.4f}", ha="center", va="bottom", fontsize=9)
+plt.tight_layout()
+fig.savefig(ERR_DIR / "sensitivity_analysis.png")
+plt.close(fig)
+print(f"   {ts()} Saved → {(ERR_DIR / 'sensitivity_analysis.png').relative_to(ROOT)}")
+
+# Plain-English summary
+sens_ablations = sens_df[sens_df["variant"] != "baseline"]
+worst_row = sens_ablations.loc[sens_ablations["rmse_change_pct"].idxmax()]
+worst_label = (worst_row["variant"]
+               .replace("_dropped", "").replace("_", " "))
+print(f"\n   ┌─────────────────────────────────────────────────────────┐")
+print(f"   │  SENSITIVITY SUMMARY                                    │")
+print(f"   ├─────────────────────────────────────────────────────────┤")
+print(f"   │  Baseline CV RMSE : {sens_baseline:<36.4f} │")
+for _, r in sens_ablations.iterrows():
+    lbl = r["variant"].replace("_dropped", "").replace("_", " ")
+    print(f"   │  Drop {lbl:<13s}: {r['cv_rmse']:.4f}  "
+          f"({r['rmse_change_pct']:+.1f}%){' ':>{28-len(lbl)}}│")
+print(f"   ├─────────────────────────────────────────────────────────┤")
+print(f"   │  Removing '{worst_label}' features hurts the most,{' ':>7}│")
+print(f"   │  increasing CV RMSE by {worst_row['rmse_change_pct']:+.1f}%"
+      f" (from {sens_baseline:.4f} to {worst_row['cv_rmse']:.4f}).  │")
+print(f"   └─────────────────────────────────────────────────────────┘")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  FEATURE IMPORTANCE (top 10)
@@ -513,11 +561,13 @@ print(f"  Test RMSE      : {comp.loc[winner,'RMSE']:.4f}")
 print(f"  Test MAE       : {comp.loc[winner,'MAE']:.4f}")
 print(f"  Test MAPE      : {comp.loc[winner,'MAPE']:.1f}%")
 print(f"  Margin vs {runner}: {margin:.4f} RMSE")
-print(f"  Sensitivity    : dropping lag_14 → RMSE +{delta:.4f} ({pct:+.1f}%)")
+print(f"  Sensitivity    : dropping '{worst_label}' hurts most → "
+      f"CV RMSE +{worst_row['rmse_change_pct']:.1f}%")
 print(f"  Top 3 features : {', '.join(idf.head(3)['feature'])}")
 print(f"\n  Outputs:")
 print(f"    {MODEL_PATH.relative_to(ROOT)}")
 print(f"    {COMP_CSV.relative_to(ROOT)}")
-print(f"    {ERR_DIR.relative_to(ROOT)}/  (4 plots)")
+print(f"    {(ERR_DIR / 'sensitivity_results.csv').relative_to(ROOT)}")
+print(f"    {ERR_DIR.relative_to(ROOT)}/  (5 plots)")
 print(f"\n  Total runtime  : {ts()}")
 print("=" * 70)
