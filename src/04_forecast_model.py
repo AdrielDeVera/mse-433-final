@@ -433,6 +433,67 @@ plt.tight_layout(); fig.savefig(ERR_DIR/"rmse_by_step.png"); plt.close(fig)
 print(f"   Saved 3 error-analysis plots")
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  PREDICTION INTERVALS — Empirical Residual-Based
+# ═══════════════════════════════════════════════════════════════════════════
+
+print(f"\n{ts()} Computing prediction intervals (empirical residual method) ...")
+
+pi_rows = []
+for step in range(HORIZON):
+    step_resid = resid[:, step]
+    pi_rows.append({
+        "step": step + 1,
+        "residual_mean": float(np.mean(step_resid)),
+        "residual_std": float(np.std(step_resid, ddof=1)),
+        "q05": float(np.percentile(step_resid, 5)),
+        "q10": float(np.percentile(step_resid, 10)),
+        "q25": float(np.percentile(step_resid, 25)),
+        "q75": float(np.percentile(step_resid, 75)),
+        "q90": float(np.percentile(step_resid, 90)),
+        "q95": float(np.percentile(step_resid, 95)),
+    })
+
+pi_df = pd.DataFrame(pi_rows)
+pi_df.to_csv(ERR_DIR / "prediction_intervals.csv", index=False)
+print(f"   Saved → {(ERR_DIR / 'prediction_intervals.csv').relative_to(ROOT)}")
+
+# Coverage check: what % of actuals fall within the 90% PI?
+in_90 = 0; total_obs = 0
+for step in range(HORIZON):
+    lower = best_preds[:, step] + pi_df.loc[step, "q05"]
+    upper = best_preds[:, step] + pi_df.loc[step, "q95"]
+    in_90 += ((test_dem[:, step] >= lower) & (test_dem[:, step] <= upper)).sum()
+    total_obs += n_skus
+coverage_90 = in_90 / total_obs * 100
+print(f"   90% PI empirical coverage: {coverage_90:.1f}% (target: 90%)")
+
+# Fan chart — prediction intervals across forecast horizon
+fig, ax = plt.subplots(figsize=(10, 5))
+steps = np.arange(1, HORIZON + 1)
+mean_pred = best_preds.mean(axis=0)
+mean_actual = test_dem.mean(axis=0)
+ax.fill_between(steps, mean_pred + pi_df["q05"].values,
+                mean_pred + pi_df["q95"].values,
+                alpha=0.15, color="#e74c3c", label="90% PI")
+ax.fill_between(steps, mean_pred + pi_df["q25"].values,
+                mean_pred + pi_df["q75"].values,
+                alpha=0.3, color="#e74c3c", label="50% PI")
+ax.plot(steps, mean_pred, color="#2c3e50", lw=2, label="Mean prediction",
+        marker="o", markersize=4)
+ax.plot(steps, mean_actual, color="#27ae60", lw=1.5, ls="--",
+        label="Mean actual", marker="s", markersize=4)
+ax.set_title(f"Prediction Intervals by Forecast Step — {winner}",
+             fontsize=13, fontweight="bold")
+ax.set_xlabel("Forecast Step (days ahead)")
+ax.set_ylabel("Demand (units)")
+ax.set_xticks(range(1, HORIZON + 1))
+ax.legend()
+plt.tight_layout()
+fig.savefig(ERR_DIR / "prediction_intervals.png")
+plt.close(fig)
+print(f"   Saved → {(ERR_DIR / 'prediction_intervals.png').relative_to(ROOT)}")
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  SENSITIVITY ANALYSIS — Feature Ablation Study
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -548,6 +609,63 @@ ax.set_xlabel("Importance (gain)")
 plt.tight_layout(); fig.savefig(ERR_DIR/"feature_importance.png"); plt.close(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  PERMUTATION IMPORTANCE (model-agnostic)
+# ═══════════════════════════════════════════════════════════════════════════
+
+print(f"\n{ts()} Computing permutation importance (5 repeats) ...")
+
+N_REPEATS = 5
+base_rmse_val = rmse(y_te, best_obj.predict(X_te))
+perm_rows = []
+rng_perm = np.random.default_rng(42)
+
+for fi, fname in enumerate(FCOLS):
+    rmse_increases = []
+    for _ in range(N_REPEATS):
+        X_perm = X_te.copy()
+        X_perm[:, fi] = rng_perm.permutation(X_perm[:, fi])
+        perm_rmse_val = rmse(y_te, best_obj.predict(X_perm))
+        rmse_increases.append(perm_rmse_val - base_rmse_val)
+    perm_rows.append({
+        "feature": fname,
+        "importance_mean": float(np.mean(rmse_increases)),
+        "importance_std": float(np.std(rmse_increases)),
+    })
+    if (fi + 1) % 7 == 0 or fi == len(FCOLS) - 1:
+        print(f"   {ts()} {fi+1}/{len(FCOLS)} features done")
+
+perm_df = pd.DataFrame(perm_rows).sort_values("importance_mean", ascending=False)
+perm_df.to_csv(ERR_DIR / "permutation_importance.csv", index=False)
+print(f"   Saved → {(ERR_DIR / 'permutation_importance.csv').relative_to(ROOT)}")
+
+# Side-by-side plot: gain-based vs permutation importance (top 10)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+t10_gain = idf.head(10)
+ax1.barh(t10_gain["feature"][::-1], t10_gain["importance"][::-1], color="#2c3e50")
+ax1.set_title("Gain-Based Importance", fontsize=12, fontweight="bold")
+ax1.set_xlabel("Importance (gain)")
+
+t10_perm = perm_df.head(10)
+ax2.barh(t10_perm["feature"].values[::-1], t10_perm["importance_mean"].values[::-1],
+         xerr=t10_perm["importance_std"].values[::-1], color="#e74c3c", capsize=3)
+ax2.set_title("Permutation Importance", fontsize=12, fontweight="bold")
+ax2.set_xlabel("RMSE Increase")
+
+plt.suptitle(f"Feature Importance Comparison — {winner}",
+             fontsize=14, fontweight="bold", y=1.02)
+plt.tight_layout()
+fig.savefig(ERR_DIR / "importance_comparison.png", bbox_inches="tight")
+plt.close(fig)
+print(f"   Saved → {(ERR_DIR / 'importance_comparison.png').relative_to(ROOT)}")
+
+print(f"\n{ts()} Top 10 permutation importance ({winner}):\n")
+for i, (_, row) in enumerate(perm_df.head(10).iterrows()):
+    bar = "█" * max(1, int(row["importance_mean"] / perm_df["importance_mean"].max() * 40))
+    print(f"  {i+1:>2}. {row['feature']:<25s} +{row['importance_mean']:.4f} "
+          f"(±{row['importance_std']:.4f})  {bar}")
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  FINAL SUMMARY
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -564,10 +682,13 @@ print(f"  Margin vs {runner}: {margin:.4f} RMSE")
 print(f"  Sensitivity    : dropping '{worst_label}' hurts most → "
       f"CV RMSE +{worst_row['rmse_change_pct']:.1f}%")
 print(f"  Top 3 features : {', '.join(idf.head(3)['feature'])}")
+print(f"  90% PI coverage: {coverage_90:.1f}%")
 print(f"\n  Outputs:")
 print(f"    {MODEL_PATH.relative_to(ROOT)}")
 print(f"    {COMP_CSV.relative_to(ROOT)}")
 print(f"    {(ERR_DIR / 'sensitivity_results.csv').relative_to(ROOT)}")
-print(f"    {ERR_DIR.relative_to(ROOT)}/  (5 plots)")
+print(f"    {(ERR_DIR / 'prediction_intervals.csv').relative_to(ROOT)}")
+print(f"    {(ERR_DIR / 'permutation_importance.csv').relative_to(ROOT)}")
+print(f"    {ERR_DIR.relative_to(ROOT)}/  (8 plots)")
 print(f"\n  Total runtime  : {ts()}")
 print("=" * 70)

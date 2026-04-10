@@ -407,6 +407,54 @@ for _, r in bot5.iterrows():
           f"saving={r['cost_saving_pct']:>6.1f}%  "
           f"action={r['action']}")
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  8. FORECAST ERROR → COST PROPAGATION ANALYSIS
+# ═══════════════════════════════════════════════════════════════════════════
+
+print(f"\n{ts()} Forecast error → cost propagation analysis ...")
+
+ERR_DIR = ROOT / "outputs" / "error_analysis"
+ERR_DIR.mkdir(parents=True, exist_ok=True)
+
+# Simulate: scale sigma_demand by multipliers to show impact on costs
+error_multipliers = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
+prop_rows = []
+
+for mult in error_multipliers:
+    sd_sim = sigma_demand * mult
+    ss_sim = Z_SL * np.sqrt(mu_lead * sd_sim**2 + mu_demand**2 * sigma_lead**2)
+    rop_sim = mu_demand * mu_lead + ss_sim
+
+    holding_sim  = (eoq / 2 + ss_sim) * H_sku
+    ordering_sim = ordering_cost_dyn
+    shortage_sim = shortage_cost_dyn
+    total_sim    = ordering_sim + holding_sim + shortage_sim
+
+    reorder_sim = int((stock_level < rop_sim).sum())
+
+    prop_rows.append({
+        "error_multiplier": mult,
+        "mean_safety_stock": float(ss_sim.mean()),
+        "mean_rop": float(rop_sim.mean()),
+        "total_annual_cost": float(total_sim.sum()),
+        "reorder_now_count": reorder_sim,
+        "cost_vs_baseline_pct": float(
+            (total_sim.sum() - total_cost_dyn.sum()) / total_cost_dyn.sum() * 100
+        ),
+    })
+
+prop_df = pd.DataFrame(prop_rows)
+prop_df.to_csv(ERR_DIR / "error_cost_propagation.csv", index=False)
+print(f"   Saved → outputs/error_analysis/error_cost_propagation.csv")
+
+print(f"\n   {'Multiplier':>12s}  {'Avg SS':>8s}  {'Avg ROP':>8s}  "
+      f"{'Total Cost':>14s}  {'Reorder':>8s}  {'Cost Δ':>8s}")
+print(f"   {'-'*12}  {'-'*8}  {'-'*8}  {'-'*14}  {'-'*8}  {'-'*8}")
+for _, r in prop_df.iterrows():
+    print(f"   {r['error_multiplier']:>10.2f}×  {r['mean_safety_stock']:>8.1f}  "
+          f"{r['mean_rop']:>8.1f}  ${r['total_annual_cost']:>13,.0f}  "
+          f"{r['reorder_now_count']:>7,}  {r['cost_vs_baseline_pct']:>+7.1f}%")
+
 print("\n" + "=" * 70)
 print(f"  Runtime: {ts()}")
 print("=" * 70)

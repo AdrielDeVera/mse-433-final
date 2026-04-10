@@ -153,6 +153,45 @@ def load_model_comparison():
 def load_intermittency():
     return pd.read_csv(INTERM_CSV)
 
+@st.cache_data
+def load_prediction_intervals():
+    pi_path = ROOT / "outputs" / "error_analysis" / "prediction_intervals.csv"
+    if pi_path.exists():
+        return pd.read_csv(pi_path)
+    return None
+
+@st.cache_data
+def load_permutation_importance():
+    perm_path = ROOT / "outputs" / "error_analysis" / "permutation_importance.csv"
+    if perm_path.exists():
+        return pd.read_csv(perm_path)
+    return None
+
+@st.cache_data
+def load_gain_importance():
+    feat_csv = ROOT / "data" / "cleaned" / "features.csv"
+    model = load_model()
+    fcols = [
+        "lag_1","lag_3","lag_7","lag_14",
+        "rolling_mean_7","rolling_std_7","rolling_mean_14","rolling_std_14","rolling_cv_14",
+        "day_of_week","week_of_year","month","is_weekend",
+        "sku_mean_demand","sku_std_demand","sku_mean_lead_time","sku_reorder_freq_days",
+        "ADI","CV2",
+    ]
+    imp = model.feature_importances_
+    # feature_importances_ length may differ from fcols if encoding cols included
+    # use min length for safety
+    n = min(len(fcols), len(imp))
+    return pd.DataFrame({"feature": fcols[:n], "importance": imp[:n]}).sort_values(
+        "importance", ascending=False)
+
+@st.cache_data
+def load_error_propagation():
+    ep_path = ROOT / "outputs" / "error_analysis" / "error_cost_propagation.csv"
+    if ep_path.exists():
+        return pd.read_csv(ep_path)
+    return None
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  REAL-TIME POLICY RECALCULATION
@@ -382,10 +421,11 @@ rec = recalculate_policies(rec_base, clean_df, ordering_cost, holding_cost, serv
 #  TABS
 # ═══════════════════════════════════════════════════════════════════════════
 
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "📈 Demand Forecast",
     "📋 Inventory Policy",
     "💰 Cost Comparison",
+    "🔬 Model Diagnostics",
 ])
 
 
@@ -407,13 +447,9 @@ with tab1:
             dr_start, dr_end = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1])
             hist_df = hist_df[(hist_df["date"] >= dr_start) & (hist_df["date"] <= dr_end)]
         fc_arr = np.array(fc_vals)
-        fc_df = pd.DataFrame({
-            "date": fc_dates,
-            "demand": fc_arr,
-            "upper": fc_arr + std_dev,
-            "lower": np.clip(fc_arr - std_dev, 0, None),
-            "type": "Forecast"
-        })
+
+        # Use step-specific empirical prediction intervals if available
+        pi_data = load_prediction_intervals()
 
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
@@ -421,10 +457,24 @@ with tab1:
         fig, ax = plt.subplots(figsize=(12, 5))
         ax.plot(hist_df["date"], hist_df["demand"], color="#2c3e50", lw=1.5,
                 label="Historical demand", alpha=0.8)
-        ax.plot(fc_df["date"], fc_df["demand"], color="#e74c3c", lw=2,
+        ax.plot(fc_dates, fc_arr, color="#e74c3c", lw=2,
                 label="Forecast", marker="o", markersize=4)
-        ax.fill_between(fc_df["date"], fc_df["lower"], fc_df["upper"],
-                        alpha=0.2, color="#e74c3c", label="±1 std confidence band")
+
+        if pi_data is not None and len(pi_data) == HORIZON:
+            upper_90 = fc_arr + pi_data["q95"].values
+            lower_90 = np.clip(fc_arr + pi_data["q05"].values, 0, None)
+            upper_50 = fc_arr + pi_data["q75"].values
+            lower_50 = np.clip(fc_arr + pi_data["q25"].values, 0, None)
+            ax.fill_between(fc_dates, lower_90, upper_90,
+                            alpha=0.12, color="#e74c3c", label="90% PI")
+            ax.fill_between(fc_dates, lower_50, upper_50,
+                            alpha=0.25, color="#e74c3c", label="50% PI")
+        else:
+            upper = fc_arr + std_dev
+            lower = np.clip(fc_arr - std_dev, 0, None)
+            ax.fill_between(fc_dates, lower, upper,
+                            alpha=0.2, color="#e74c3c", label="±1 std band")
+
         ax.axvline(hist_df["date"].iloc[-1], color="gray", ls="--", alpha=0.5,
                    label="Forecast start")
         ax.set_ylabel("Daily Demand (units)")
@@ -559,3 +609,215 @@ with tab3:
     col2.metric("Total Dynamic Cost", f"${total_dyn:,.0f}")
     col3.metric("Aggregate Saving", f"{agg_saving:.1f}%",
                 delta=f"-${total_sta - total_dyn:,.0f}")
+
+
+# ── Tab 4: Model Diagnostics ───────────────────────────────────────────────
+with tab4:
+    st.subheader("Model Diagnostics")
+
+    import matplotlib.pyplot as plt
+
+    diag1, diag2, diag3 = st.tabs([
+        "Feature Importance",
+        "Prediction Intervals",
+        "Error → Cost Propagation",
+    ])
+
+    # ── Diagnostics sub-tab 1: Feature Importance Comparison ────────────
+    with diag1:
+        st.markdown("#### Gain-Based vs Permutation Importance")
+        st.caption(
+            "**Gain-based** measures how much each feature reduces loss in tree "
+            "splits. **Permutation** measures how much RMSE increases when a "
+            "feature is randomly shuffled — a model-agnostic validation."
+        )
+
+        perm_data = load_permutation_importance()
+
+        if perm_data is not None:
+            col_a, col_b = st.columns(2)
+
+            with col_a:
+                # Gain-based importance (from model)
+                model = load_model()
+                fcols = [
+                    "lag_1","lag_3","lag_7","lag_14",
+                    "rolling_mean_7","rolling_std_7","rolling_mean_14",
+                    "rolling_std_14","rolling_cv_14",
+                    "day_of_week","week_of_year","month","is_weekend",
+                    "sku_mean_demand","sku_std_demand","sku_mean_lead_time",
+                    "sku_reorder_freq_days","ADI","CV2",
+                    "category_enc","intermittency_enc",
+                ]
+                imp = model.feature_importances_
+                n = min(len(fcols), len(imp))
+                gain_df = pd.DataFrame({
+                    "feature": fcols[:n], "importance": imp[:n]
+                }).sort_values("importance", ascending=False)
+
+                fig, ax = plt.subplots(figsize=(7, 5))
+                t10 = gain_df.head(10)
+                ax.barh(t10["feature"].values[::-1],
+                        t10["importance"].values[::-1], color="#2c3e50")
+                ax.set_title("Gain-Based (Top 10)", fontweight="bold")
+                ax.set_xlabel("Importance (gain)")
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close(fig)
+
+            with col_b:
+                fig, ax = plt.subplots(figsize=(7, 5))
+                t10p = perm_data.head(10)
+                ax.barh(t10p["feature"].values[::-1],
+                        t10p["importance_mean"].values[::-1],
+                        xerr=t10p["importance_std"].values[::-1],
+                        color="#e74c3c", capsize=3)
+                ax.set_title("Permutation (Top 10)", fontweight="bold")
+                ax.set_xlabel("RMSE Increase")
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close(fig)
+
+            st.markdown("---")
+            st.markdown("##### Full Permutation Importance Table")
+            st.dataframe(
+                perm_data.style.format({
+                    "importance_mean": "{:.4f}",
+                    "importance_std": "{:.4f}",
+                }).bar(subset=["importance_mean"], color="#e74c3c80"),
+                use_container_width=True,
+            )
+        else:
+            st.info("Run the pipeline to generate permutation importance data.")
+
+    # ── Diagnostics sub-tab 2: Prediction Intervals ────────────────────
+    with diag2:
+        st.markdown("#### Prediction Interval Analysis")
+        st.caption(
+            "Empirical prediction intervals derived from held-out test residuals "
+            "at each forecast step. The fan chart shows 50% and 90% intervals."
+        )
+
+        pi_data = load_prediction_intervals()
+
+        if pi_data is not None:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+            steps = pi_data["step"].values
+            # Left: interval width growth
+            ax1.plot(steps, pi_data["residual_std"].values, color="#2c3e50",
+                     lw=2, marker="o")
+            ax1.set_title("Residual Std Dev by Step", fontweight="bold")
+            ax1.set_xlabel("Forecast Step (days ahead)")
+            ax1.set_ylabel("Residual Std Dev")
+            ax1.set_xticks(range(1, HORIZON + 1))
+
+            # Right: quantile bands
+            ax2.fill_between(steps, pi_data["q05"].values, pi_data["q95"].values,
+                             alpha=0.15, color="#e74c3c", label="90% PI")
+            ax2.fill_between(steps, pi_data["q25"].values, pi_data["q75"].values,
+                             alpha=0.3, color="#e74c3c", label="50% PI")
+            ax2.axhline(0, color="black", lw=0.8, ls="--")
+            ax2.plot(steps, pi_data["residual_mean"].values, color="#2c3e50",
+                     lw=2, marker="o", label="Mean residual")
+            ax2.set_title("Residual Distribution by Step", fontweight="bold")
+            ax2.set_xlabel("Forecast Step (days ahead)")
+            ax2.set_ylabel("Residual (actual − predicted)")
+            ax2.set_xticks(range(1, HORIZON + 1))
+            ax2.legend()
+
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+
+            st.markdown("---")
+            st.markdown("##### Per-Step Interval Table")
+            st.dataframe(
+                pi_data.style.format({
+                    "residual_mean": "{:.2f}", "residual_std": "{:.2f}",
+                    "q05": "{:.2f}", "q10": "{:.2f}", "q25": "{:.2f}",
+                    "q75": "{:.2f}", "q90": "{:.2f}", "q95": "{:.2f}",
+                }),
+                use_container_width=True,
+            )
+        else:
+            st.info("Run the pipeline to generate prediction interval data.")
+
+    # ── Diagnostics sub-tab 3: Error → Cost Propagation ────────────────
+    with diag3:
+        st.markdown("#### How Forecast Error Impacts Inventory Costs")
+        st.caption(
+            "Simulates the effect of scaling forecast uncertainty (σ_demand) on "
+            "safety stock, reorder decisions, and total annual cost. A multiplier "
+            "of 1.0× is the current model; higher values simulate worse forecasts."
+        )
+
+        ep_data = load_error_propagation()
+
+        if ep_data is not None:
+            fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+            mults = ep_data["error_multiplier"].values
+
+            # Left: safety stock
+            axes[0].plot(mults, ep_data["mean_safety_stock"].values,
+                         color="#2c3e50", lw=2, marker="o")
+            axes[0].axvline(1.0, color="gray", ls="--", alpha=0.5)
+            axes[0].set_title("Avg Safety Stock", fontweight="bold")
+            axes[0].set_xlabel("Error Multiplier")
+            axes[0].set_ylabel("Units")
+
+            # Centre: total cost
+            costs = ep_data["total_annual_cost"].values
+            colours = ["#27ae60" if m <= 1.0 else "#e74c3c" for m in mults]
+            axes[1].bar(mults.astype(str), costs, color=colours, edgecolor="white")
+            axes[1].set_title("Total Annual Cost", fontweight="bold")
+            axes[1].set_xlabel("Error Multiplier")
+            axes[1].set_ylabel("Cost ($)")
+            axes[1].tick_params(axis="x", rotation=30)
+
+            # Right: reorder count
+            axes[2].plot(mults, ep_data["reorder_now_count"].values,
+                         color="#8e44ad", lw=2, marker="s")
+            axes[2].axvline(1.0, color="gray", ls="--", alpha=0.5)
+            axes[2].set_title("Reorder Now Count", fontweight="bold")
+            axes[2].set_xlabel("Error Multiplier")
+            axes[2].set_ylabel("SKUs")
+
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+
+            st.markdown("---")
+            # Key insight callout
+            baseline_cost = ep_data.loc[
+                ep_data["error_multiplier"] == 1.0, "total_annual_cost"
+            ].values[0]
+            worst_cost = ep_data["total_annual_cost"].max()
+            worst_mult = ep_data.loc[
+                ep_data["total_annual_cost"].idxmax(), "error_multiplier"
+            ]
+            pct_increase = (worst_cost - baseline_cost) / baseline_cost * 100
+
+            st.warning(
+                f"**Key insight:** If forecast error triples ({worst_mult:.0f}× "
+                f"current σ), total annual cost increases by "
+                f"**{pct_increase:.1f}%** — from "
+                f"${baseline_cost:,.0f} to ${worst_cost:,.0f}. "
+                f"This underscores the value of maintaining forecast accuracy."
+            )
+
+            st.markdown("##### Full Propagation Table")
+            st.dataframe(
+                ep_data.style.format({
+                    "error_multiplier": "{:.2f}×",
+                    "mean_safety_stock": "{:.1f}",
+                    "mean_rop": "{:.1f}",
+                    "total_annual_cost": "${:,.0f}",
+                    "reorder_now_count": "{:,}",
+                    "cost_vs_baseline_pct": "{:+.1f}%",
+                }),
+                use_container_width=True,
+            )
+        else:
+            st.info("Run the pipeline to generate error-cost propagation data.")
