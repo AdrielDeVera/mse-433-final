@@ -42,7 +42,7 @@
 \titlespacing*{\section}{0pt}{1.2em}{0.4em}
 \titlespacing*{\subsection}{0pt}{0.8em}{0.2em}
 
-\graphicspath{{../outputs/}}
+\graphicspath{{../../outputs/}}
 \tolerance=1000
 \emergencystretch=1em
 
@@ -138,11 +138,11 @@ All rolling features use a one-day shift before computing the window, preventing
 
 Each SKU is classified using the \textbf{Syntetos--Boylan (2005)} framework~\cite{syntetos2005accuracy}, which partitions demand patterns into four quadrants:
 
-ADI (Average Demand Interval) measures how often demand occurs---the average days between replenishment events. A high ADI means sporadic ordering, carrying different risk than a daily-ordered SKU even at identical average rates.
+ADI (Average Demand Interval) measures how often demand occurs - the average days between replenishment events. A high ADI means sporadic ordering, carrying different risk than a daily-ordered SKU even at identical average rates.
 
 CV\textsuperscript{2} (Squared Coefficient of Variation) measures how erratic each demand event is, computed as $(\sigma_d / \mu_d)^2$. Low CV\textsuperscript{2} means consistent quantities; high CV\textsuperscript{2} means wild quantity swings.
 
-Together these define four classes: Smooth (regular, consistent), Erratic (regular, variable), Intermittent (sporadic, consistent), and Lumpy (sporadic, variable---hardest to manage).
+Together these define four classes: Smooth (regular, consistent), Erratic (regular, variable), Intermittent (sporadic, consistent), and Lumpy (sporadic, variable).
 
 \textbf{Results}: Intermittent 2,464 (86.6\%), Lumpy 382 (13.4\%). All SKUs have ADI $\geq 1.32$ due to the periodic replenishment structure. The operational distinction is between Intermittent SKUs (stable quantities, reliable safety stock) and Lumpy SKUs (high CV\textsuperscript{2}, dominant quantity uncertainty). A uniform ``7-day buffer'' rule treats a CV\textsuperscript{2} = 0.001 SKU and a CV\textsuperscript{2} = 15 SKU identically; the former is over-buffered (cost waste) while the latter under-buffered (stockout risk). Classification enables the model to learn different dynamics per class and the optimiser to size safety stock proportionally.
 
@@ -182,9 +182,9 @@ Four models were evaluated on a held-out test set comprising the final 14 rows p
 \textbf{Model} & \textbf{RMSE} & \textbf{MAE} & \textbf{MAPE} \\
 \midrule
 Naive (last observed value) & 7.9754 & 5.6312 & 59.6\% \\
-MA-7 (7-day moving average) & 6.1359 & 4.3673 & --- \\
-\textbf{XGBoost (hist-GBT) $\star$} & \textbf{5.7240} & \textbf{4.1407} & --- \\
-LightGBM (hist-GBT) & 5.7350 & 4.1426 & --- \\
+MA-7 (7-day moving average) & 6.1359 & 4.3673 & - \\
+\textbf{XGBoost (hist-GBT) $\star$} & \textbf{5.7240} & \textbf{4.1407} & - \\
+LightGBM (hist-GBT) & 5.7350 & 4.1426 & - \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -304,7 +304,7 @@ Total annual cost --- dynamic policy & \$130,875,651 \\
 \end{tabular}
 \end{table}
 
-Policy statistics: mean safety stock = 63.1 units (median 59.5), mean ROP = 205.9 (median 184.9), mean EOQ = 56.5 (median 49.4). The saving distribution is skewed toward the high end: 1,198 SKUs (42.1\%) achieve 40--50\% savings and 470 (16.5\%) exceed 50\%. Only \textbf{97 SKUs (3.4\%)} show the dynamic policy costing more---genuine high-variability cases where the formula correctly prescribes a larger buffer than the crude 7-day rule. Top 5 SKUs by saving in Appendix (Table~\ref{tab:top5}).
+Policy statistics: mean safety stock = 63.1 units (median 59.5), mean ROP = 205.9 (median 184.9), mean EOQ = 56.5 (median 49.4). The saving distribution is skewed toward the high end: 1,198 SKUs (42.1\%) achieve 40--50\% savings and 470 (16.5\%) exceed 50\%. Only \textbf{97 SKUs (3.4\%)} show the dynamic policy costing more; genuine high-variability cases where the formula correctly prescribes a larger buffer than the crude 7-day rule. Top 5 SKUs by saving in Appendix (Table~\ref{tab:top5}).
 
 \subsection{Forecast Error to Cost Propagation}
 \label{sec:error-propagation}
@@ -325,7 +325,7 @@ The lead-time term is $\sim$10$\times$ larger. The number of reorder decisions i
 \section{Recommendations}
 \label{sec:recommendations}
 
-\textbf{1.~Issue replenishment orders for all 1,090 ``Reorder Now'' SKUs within the next business day.} The dynamic ROP identifies these items as below their stochastically-derived reorder point. At mean demand of 25.6 units/day and mean lead time of 5.5 days, each day of delay exposes $\sim$1,394 units of unmet demand (\$13,940/day in shortage penalties). Placing 1,090 orders costs \$54,500 but prevents up to \$13,940/day in losses---payback $<$4 days.
+\textbf{1.~Issue replenishment orders for all 1,090 ``Reorder Now'' SKUs within the next business day.} The dynamic ROP identifies these items as below their stochastically-derived reorder point. At mean demand of 25.6 units/day and mean lead time of 5.5 days, each day of delay exposes $\sim$1,394 units of unmet demand (\$13,940/day in shortage penalties). Placing 1,090 orders costs \$54,500 but prevents up to \$13,940/day in losses which payback is $<$4 days.
 
 \textbf{2.~Adopt the dynamic policy as the standing operational standard, targeting \$110.8\,M annual saving.} The static policy costs \$241.7\,M/yr; the dynamic policy reduces this to \$130.9\,M---\textbf{45.9\% reduction}. No new infrastructure required; weekly process is one terminal command plus dashboard review.
 
@@ -450,7 +450,7 @@ Supply chain forecasting: Theory, practice, their gap and the future.
 \end{tabular}
 \end{table}
 
-\textbf{Dependencies} (\texttt{requirements.txt}): \texttt{numpy==2.2.6}, \texttt{pandas==2.3.3}, \texttt{matplotlib==3.10.3}, \texttt{seaborn==0.13.2}, \texttt{streamlit==1.45.1}. The HistogramGBT is implemented entirely in NumPy---no scikit-learn, XGBoost, or LightGBM required.
+\textbf{Dependencies} (\texttt{requirements.txt}): \texttt{numpy==2.2.6}, \texttt{pandas==2.3.3}, \texttt{matplotlib==3.10.3}, \texttt{seaborn==0.13.2}, \texttt{streamlit==1.45.1}. The HistogramGBT is implemented entirely in NumPy.
 
 \textbf{Reproduction:}
 \begin{lstlisting}
@@ -615,5 +615,92 @@ All outputs (CSVs, plots, serialised model) are regenerated deterministically. R
 \bottomrule
 \end{tabular}
 \end{table}
+
+% ══════════════════════════════════════════════════════════════════════
+%  APPENDIX B — Dashboard Screenshots
+% ══════════════════════════════════════════════════════════════════════
+\newpage
+\section{Appendix: Dashboard Screenshots}
+\label{sec:appendix-dashboard}
+
+The following screenshots document the interactive Streamlit dashboard
+(\texttt{dashboard/app.py}) that serves as the decision-support interface for
+the inventory optimisation system. The dashboard provides four main tabs plus
+configurable sidebar controls; all parameter changes propagate in real time.
+
+% ── Demand Forecast ──────────────────────────────────────────────────
+\subsection*{Demand Forecast}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{screenshots/forecast_tab.png}
+\caption{Demand Forecast tab for SKU ITM10000. The left sidebar contains
+controls; SKU selector, historical date range picker, cost parameter
+sliders (ordering cost, holding cost, service level), and a collapsible
+model performance summary. The main panel displays historical daily demand
+(dark line), the 14-day recursive forecast (red line with markers), and
+50\%/90\% prediction interval bands. Metric cards below summarise the
+14-day total, average daily demand, last recorded stock level, and
+recommended action.}
+\label{fig:ss-forecast}
+\end{figure}
+
+% ── Inventory Policy ─────────────────────────────────────────────────
+\subsection*{Inventory Policy}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{screenshots/policy_tab.png}
+\caption{Inventory Policy tab. Rows are colour-coded: green = Hold,
+red = Reorder Now. The table includes safety stock, reorder point (ROP),
+economic order quantity (EOQ), current stock, and annual cost under the
+dynamic policy. Multi-select filters for category, action, and
+intermittency class appear above the table; aggregate metrics appear below.}
+\label{fig:ss-policy}
+\end{figure}
+
+% ── Cost Comparison ──────────────────────────────────────────────────
+\subsection*{Cost Comparison}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{screenshots/cost_tab.png}
+\caption{Cost Comparison tab. Grouped bar chart of the top 20 SKUs by
+cost saving: static policy (red) vs.\ dynamic policy (green) with
+percentage savings annotated above each pair. Summary cards show total
+static cost, total dynamic cost, and aggregate saving.}
+\label{fig:ss-cost}
+\end{figure}
+
+% ── Model Diagnostics ────────────────────────────────────────────────
+\subsection*{Model Diagnostics}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{screenshots/diagnostics_feature_importance.png}
+\caption{Feature Importance sub-tab. Side-by-side bar charts of gain-based
+importance (left) and permutation importance with error bars (right) for
+the top 10 features, with a full permutation importance table below.}
+\label{fig:ss-importance}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{screenshots/diagnostics_prediction_intervals.png}
+\caption{Prediction Intervals sub-tab. Left: residual standard deviation
+by forecast step (1--14). Right: residual distribution fan chart with
+50\% and 90\% confidence bands. Per-step interval table below.}
+\label{fig:ss-pi}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{screenshots/diagnostics_error_cost.png}
+\caption{Error-to-Cost Propagation sub-tab. Three-panel sensitivity
+analysis: safety stock vs.\ error multiplier (left), total annual cost
+(centre), and reorder count (right). The alert box quantifies worst-case
+cost increase if forecast error triples.}
+\label{fig:ss-error-cost}
+\end{figure}
 
 \end{document}
